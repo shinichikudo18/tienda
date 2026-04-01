@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { initDB } from './db/database.js';
+import initDB from './db/database.js';
 
 import authRoutes from './routes/auth.js';
 import usersRoutes from './routes/users.js';

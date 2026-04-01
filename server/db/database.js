@@ -182,4 +182,5 @@ export function lastInsertRowid() {
   return result[0]?.values[0]?.[0] || 0;
 }
 
-export default { initDB, run, get, all, lastInsertRowid, saveDB, getDb: () => db };
+export { run, get, all, lastInsertRowid, saveDB, getDb };
+export default initDB;
