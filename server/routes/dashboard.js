@@ -1,5 +1,5 @@
 import express from 'express';
-import db from '../db/database.js';
+import { get, all } from '../db/database.js';
 import { authMiddleware } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -19,38 +19,34 @@ router.get('/stats', (req, res) => {
       params = [req.user.id];
     }
 
-    const cashToday = db.prepare(`
+    const cashToday = get(`
       SELECT COALESCE(SUM(total), 0) as total
       FROM sales s
-      WHERE s.type = 'contado' 
-        AND DATE(s.created_at) = ?
-        ${salesFilter}
-    `).get(today, ...params);
+      WHERE s.type = 'contado' AND DATE(s.created_at) = ? ${salesFilter}
+    `, [today, ...params]);
 
-    const fiadoTotal = db.prepare(`
+    const fiadoTotal = get(`
       SELECT COALESCE(SUM(remaining_amount), 0) as total
       FROM debts d
       WHERE d.status != 'paid'
-    `).get();
+    `);
 
-    const inventoryValue = db.prepare(`
+    const inventoryValue = get(`
       SELECT COALESCE(SUM(p.stock_quantity * p.selling_price), 0) as total
       FROM products p
-    `).get();
+    `);
 
-    const monthlySales = db.prepare(`
+    const monthlySales = get(`
       SELECT COALESCE(SUM(total), 0) as total
       FROM sales s
-      WHERE DATE(s.created_at) >= ?
-        ${salesFilter}
-    `).get(startOfMonth, ...params);
+      WHERE DATE(s.created_at) >= ? ${salesFilter}
+    `, [startOfMonth, ...params]);
 
-    const todaySales = db.prepare(`
+    const todaySales = get(`
       SELECT COALESCE(SUM(total), 0) as total, COUNT(*) as count
       FROM sales s
-      WHERE DATE(s.created_at) = ?
-        ${salesFilter}
-    `).get(today, ...params);
+      WHERE DATE(s.created_at) = ? ${salesFilter}
+    `, [today, ...params]);
 
     const last7Days = [];
     for (let i = 6; i >= 0; i--) {
@@ -58,12 +54,11 @@ router.get('/stats', (req, res) => {
       date.setDate(date.getDate() - i);
       const dateStr = date.toISOString().split('T')[0];
       
-      const daySales = db.prepare(`
+      const daySales = get(`
         SELECT COALESCE(SUM(total), 0) as total
         FROM sales s
-        WHERE DATE(s.created_at) = ?
-          ${salesFilter}
-      `).get(dateStr, ...params);
+        WHERE DATE(s.created_at) = ? ${salesFilter}
+      `, [dateStr, ...params]);
       
       last7Days.push({
         date: dateStr,
@@ -72,23 +67,22 @@ router.get('/stats', (req, res) => {
       });
     }
 
-    const topProducts = db.prepare(`
+    const topProducts = all(`
       SELECT p.name, SUM(si.quantity) as units_sold, SUM(si.subtotal) as total
       FROM sale_items si
       JOIN sales s ON si.sale_id = s.id
       JOIN products p ON si.product_id = p.id
-      WHERE DATE(s.created_at) >= ?
-        ${salesFilter}
+      WHERE DATE(s.created_at) >= ? ${salesFilter}
       GROUP BY p.id
       ORDER BY total DESC
       LIMIT 5
-    `).all(startOfMonth, ...params);
+    `, [startOfMonth, ...params]);
 
-    const lowStock = db.prepare(`
+    const lowStock = get(`
       SELECT COUNT(*) as count
       FROM products p
       WHERE p.stock_quantity <= p.min_stock AND p.min_stock > 0
-    `).get();
+    `);
 
     res.json({
       cashToday: cashToday.total,

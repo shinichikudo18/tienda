@@ -1,6 +1,6 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
-import db from '../db/database.js';
+import { run, get, all } from '../db/database.js';
 import { generateToken, authMiddleware } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -13,7 +13,7 @@ router.post('/login', (req, res) => {
       return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
     }
 
-    const user = db.prepare('SELECT * FROM users WHERE username = ? AND active = 1').get(username);
+    const user = get('SELECT * FROM users WHERE username = ? AND active = 1', [username]);
     
     if (!user || !bcrypt.compareSync(password, user.password_hash)) {
       return res.status(401).json({ error: 'Credenciales inválidas' });
@@ -38,7 +38,7 @@ router.post('/login', (req, res) => {
 
 router.get('/me', authMiddleware, (req, res) => {
   try {
-    const user = db.prepare('SELECT id, username, full_name, role FROM users WHERE id = ?').get(req.user.id);
+    const user = get('SELECT id, username, full_name, role FROM users WHERE id = ?', [req.user.id]);
     
     if (!user) {
       return res.status(404).json({ error: 'Usuario no encontrado' });

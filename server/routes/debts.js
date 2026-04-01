@@ -1,5 +1,5 @@
 import express from 'express';
-import db from '../db/database.js';
+import { run, get, all } from '../db/database.js';
 import { authMiddleware, requireRole } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -11,22 +11,22 @@ router.get('/', (req, res) => {
     let debts;
     
     if (req.user.role === 'vendedor') {
-      debts = db.prepare(`
+      debts = all(`
         SELECT d.*, c.name as client_name, s.created_at as sale_date
         FROM debts d
         JOIN clients c ON d.client_id = c.id
         JOIN sales s ON d.sale_id = s.id
         WHERE s.user_id = ?
         ORDER BY d.created_at DESC
-      `).all(req.user.id);
+      `, [req.user.id]);
     } else {
-      debts = db.prepare(`
+      debts = all(`
         SELECT d.*, c.name as client_name, s.created_at as sale_date
         FROM debts d
         JOIN clients c ON d.client_id = c.id
         JOIN sales s ON d.sale_id = s.id
         ORDER BY d.created_at DESC
-      `).all();
+      `);
     }
     
     res.json(debts);
@@ -38,16 +38,16 @@ router.get('/', (req, res) => {
 
 router.get('/stats', (req, res) => {
   try {
-    const stats = db.prepare(`
+    const stats = get(`
       SELECT 
         COALESCE(SUM(remaining_amount), 0) as total_pending,
         COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_count,
         COUNT(CASE WHEN status = 'partial' THEN 1 END) as partial_count
       FROM debts
       WHERE status != 'paid'
-    `).get();
+    `);
 
-    const recentPayments = db.prepare(`
+    const recentPayments = all(`
       SELECT dp.*, c.name as client_name, u.full_name as paid_by_name
       FROM debt_payments dp
       JOIN debts d ON dp.debt_id = d.id
@@ -55,9 +55,9 @@ router.get('/stats', (req, res) => {
       LEFT JOIN users u ON dp.paid_by = u.id
       ORDER BY dp.created_at DESC
       LIMIT 10
-    `).all();
+    `);
 
-    const topDebtors = db.prepare(`
+    const topDebtors = all(`
       SELECT c.id, c.name, COALESCE(SUM(d.remaining_amount), 0) as total_debt
       FROM clients c
       JOIN debts d ON c.id = d.client_id
@@ -65,7 +65,7 @@ router.get('/stats', (req, res) => {
       GROUP BY c.id
       ORDER BY total_debt DESC
       LIMIT 5
-    `).all();
+    `);
     
     res.json({ stats, recentPayments, topDebtors });
   } catch (error) {
@@ -82,12 +82,12 @@ router.post('/:id/pay', (req, res) => {
       return res.status(400).json({ error: 'Monto inválido' });
     }
 
-    const debt = db.prepare(`
+    const debt = get(`
       SELECT d.*, c.name as client_name
       FROM debts d
       JOIN clients c ON d.client_id = c.id
       WHERE d.id = ?
-    `).get(req.params.id);
+    `, [req.params.id]);
 
     if (!debt) {
       return res.status(404).json({ error: 'Deuda no encontrada' });
@@ -95,29 +95,22 @@ router.post('/:id/pay', (req, res) => {
 
     const paymentAmount = Math.min(amount, debt.remaining_amount);
 
-    db.prepare(`
-      UPDATE debts SET 
-        paid_amount = paid_amount + ?,
-        remaining_amount = remaining_amount - ?,
-        status = CASE 
-          WHEN remaining_amount - ? <= 0 THEN 'paid' 
-          WHEN paid_amount + ? > 0 THEN 'partial'
-          ELSE status 
-        END
-      WHERE id = ?
-    `).run(paymentAmount, paymentAmount, paymentAmount, paymentAmount, req.params.id);
+    const newRemaining = debt.remaining_amount - paymentAmount;
+    const newPaid = debt.paid_amount + paymentAmount;
+    const newStatus = newRemaining <= 0 ? 'paid' : (newPaid > 0 ? 'partial' : 'pending');
 
-    db.prepare(`
-      INSERT INTO debt_payments (debt_id, amount, paid_by)
-      VALUES (?, ?, ?)
-    `).run(req.params.id, paymentAmount, req.user.id);
+    run(`UPDATE debts SET paid_amount = ?, remaining_amount = ?, status = ? WHERE id = ?`,
+      [newPaid, newRemaining, newStatus, req.params.id]);
 
-    const updated = db.prepare(`
+    run(`INSERT INTO debt_payments (debt_id, amount, paid_by) VALUES (?, ?, ?)`,
+      [req.params.id, paymentAmount, req.user.id]);
+
+    const updated = get(`
       SELECT d.*, c.name as client_name
       FROM debts d
       JOIN clients c ON d.client_id = c.id
       WHERE d.id = ?
-    `).get(req.params.id);
+    `, [req.params.id]);
 
     res.json(updated);
   } catch (error) {

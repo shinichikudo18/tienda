@@ -1,5 +1,5 @@
 import express from 'express';
-import db from '../db/database.js';
+import { run, get, all } from '../db/database.js';
 import { authMiddleware } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -11,32 +11,32 @@ router.get('/', (req, res) => {
     let sales;
     
     if (req.user.role === 'vendedor') {
-      sales = db.prepare(`
+      sales = all(`
         SELECT s.*, c.name as client_name, u.full_name as user_name
         FROM sales s
         LEFT JOIN clients c ON s.client_id = c.id
         LEFT JOIN users u ON s.user_id = u.id
         WHERE s.user_id = ?
         ORDER BY s.created_at DESC
-      `).all(req.user.id);
+      `, [req.user.id]);
     } else {
-      sales = db.prepare(`
+      sales = all(`
         SELECT s.*, c.name as client_name, u.full_name as user_name
         FROM sales s
         LEFT JOIN clients c ON s.client_id = c.id
         LEFT JOIN users u ON s.user_id = u.id
         ORDER BY s.created_at DESC
         LIMIT 100
-      `).all();
+      `);
     }
 
     for (let sale of sales) {
-      sale.items = db.prepare(`
+      sale.items = all(`
         SELECT si.*, p.name as product_name
         FROM sale_items si
         JOIN products p ON si.product_id = p.id
         WHERE si.sale_id = ?
-      `).all(sale.id);
+      `, [sale.id]);
     }
     
     res.json(sales);
@@ -48,13 +48,13 @@ router.get('/', (req, res) => {
 
 router.get('/:id', (req, res) => {
   try {
-    const sale = db.prepare(`
+    const sale = get(`
       SELECT s.*, c.name as client_name, u.full_name as user_name
       FROM sales s
       LEFT JOIN clients c ON s.client_id = c.id
       LEFT JOIN users u ON s.user_id = u.id
       WHERE s.id = ?
-    `).get(req.params.id);
+    `, [req.params.id]);
     
     if (!sale) {
       return res.status(404).json({ error: 'Venta no encontrada' });
@@ -64,12 +64,12 @@ router.get('/:id', (req, res) => {
       return res.status(403).json({ error: 'No tienes acceso a esta venta' });
     }
 
-    sale.items = db.prepare(`
+    sale.items = all(`
       SELECT si.*, p.name as product_name
       FROM sale_items si
       JOIN products p ON si.product_id = p.id
       WHERE si.sale_id = ?
-    `).all(sale.id);
+    `, [sale.id]);
     
     res.json(sale);
   } catch (error) {
@@ -100,43 +100,31 @@ router.post('/', (req, res) => {
     
     const total = subtotal - (discount || 0);
 
-    const saleResult = db.prepare(`
-      INSERT INTO sales (user_id, client_id, total, discount, type)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(req.user.id, client_id || null, total, discount || 0, type);
+    run(`INSERT INTO sales (user_id, client_id, total, discount, type) VALUES (?, ?, ?, ?, ?)`,
+      [req.user.id, client_id || null, total, discount || 0, type]);
+
+    const saleIdResult = all('SELECT last_insert_rowid() as id');
+    const saleId = saleIdResult[0].id;
 
     for (let item of items) {
-      db.prepare(`
-        INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, subtotal)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(saleResult.lastInsertRowid, item.product_id, item.quantity, item.unit_price, item.quantity * item.unit_price);
+      run(`INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, subtotal) VALUES (?, ?, ?, ?, ?)`,
+        [saleId, item.product_id, item.quantity, item.unit_price, item.quantity * item.unit_price]);
 
-      db.prepare(`
-        UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?
-      `).run(item.quantity, item.product_id);
+      run(`UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?`, [item.quantity, item.product_id]);
 
       if (req.user.role === 'vendedor') {
-        db.prepare(`
-          UPDATE stock_assignments SET quantity_assigned = quantity_assigned - ? 
-          WHERE product_id = ? AND user_id = ?
-        `).run(item.quantity, item.product_id, req.user.id);
+        run(`UPDATE stock_assignments SET quantity_assigned = quantity_assigned - ? WHERE product_id = ? AND user_id = ?`,
+          [item.quantity, item.product_id, req.user.id]);
       }
     }
 
     if (type === 'fiado' && client_id) {
-      db.prepare(`
-        INSERT INTO debts (client_id, sale_id, original_amount, remaining_amount, paid_amount, status)
-        VALUES (?, ?, ?, ?, 0, 'pending')
-      `).run(client_id, saleResult.lastInsertRowid, total, total);
+      run(`INSERT INTO debts (client_id, sale_id, original_amount, remaining_amount, paid_amount, status) VALUES (?, ?, ?, ?, 0, 'pending')`,
+        [client_id, saleId, total, total]);
     }
 
-    const sale = db.prepare('SELECT * FROM sales WHERE id = ?').get(saleResult.lastInsertRowid);
-    sale.items = db.prepare(`
-      SELECT si.*, p.name as product_name
-      FROM sale_items si
-      JOIN products p ON si.product_id = p.id
-      WHERE si.sale_id = ?
-    `).all(saleResult.lastInsertRowid);
+    const sale = get('SELECT * FROM sales WHERE id = ?', [saleId]);
+    sale.items = all(`SELECT si.*, p.name as product_name FROM sale_items si JOIN products p ON si.product_id = p.id WHERE si.sale_id = ?`, [saleId]);
     
     res.status(201).json(sale);
   } catch (error) {
