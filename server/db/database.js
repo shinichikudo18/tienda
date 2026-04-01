@@ -182,5 +182,5 @@ export function lastInsertRowid() {
   return result[0]?.values[0]?.[0] || 0;
 }
 
-export { run, get, all, lastInsertRowid, saveDB, getDb };
+export { run, get, all, lastInsertRowid, getDb };
 export default initDB;
