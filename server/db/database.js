@@ -19,7 +19,7 @@ async function initDB() {
     db = new SQL.Database();
   }
 
-  db.pragma('journal_mode = WAL');
+  db.run('PRAGMA journal_mode = WAL');
 
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
